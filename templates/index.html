@@ -104,6 +104,13 @@
             background: #f1f1f1;
         }
 
+        /* Highlight early payment discount rows */
+        .discount {
+            background-color: #e6ffe6 !important;
+            font-weight: bold;
+            color: #2d7a2d;
+        }
+
         .actions {
             margin-bottom: 20px;
         }
@@ -126,7 +133,6 @@
     <div class="actions">
         <a href="#form">➕ Add Entry (Form)</a>
         <a href="#csv">📁 Upload CSV</a>
-        <a href="{{ url_for('test_email') }}">🔔 Send Reminders Now</a>
     </div>
 
     {% with messages = get_flashed_messages(with_categories=true) %}
@@ -157,42 +163,58 @@
         <label for="email">Vendor Email:</label>
         <input type="email" id="email" name="email" placeholder="vendor@example.com" required />
 
-        <button type="submit">Add Entry & Send Reminders</button>
+        <label for="terms">Terms (e.g., "2/10 Net 30"):</label>
+        <input type="text" id="terms" name="terms" placeholder="Optional" />
+
+        <button type="submit">Add Entry</button>
     </form>
 
     <h2 id="csv">Upload Entries via CSV</h2>
     <form method="POST" action="{{ url_for('upload_csv') }}" enctype="multipart/form-data">
         <input type="file" name="file" accept=".csv" required />
-        <button type="submit">Upload CSV & Send Reminders</button>
+        <button type="submit">Upload CSV</button>
     </form>
 
-    <h2>All Payment Entries</h2>
+    <h2>Scheduled Payments Dashboard</h2>
     <table>
         <thead>
             <tr>
                 <th>ID</th>
+                <th>Invoice No.</th>
                 <th>Vendor</th>
-                <th>Invoice #</th>
+                <th>Amount (₹)</th>
                 <th>Invoice Date</th>
                 <th>Due Date</th>
-                <th>Amount (₹)</th>
-                <th>Email</th>
+                <th>Scheduled Payment Date</th>
+                <th>Status</th>
+                <th>Terms</th>
+                <th>Discount</th>
             </tr>
         </thead>
         <tbody>
-            {% for e in entries %}
+            {% for entry in entries %}
+            {% set discount = '2/10' in (entry.terms or '') %}
+            <tr class="{{ 'discount' if discount and entry.scheduled_date != entry.due_date else '' }}">
+                <td>{{ entry.id }}</td>
+                <td>{{ entry.invoice_no }}</td>
+                <td>{{ entry.vendor }}</td>
+                <td>{{ "%.2f"|format(entry.amount) }}</td>
+                <td>{{ entry.invoice_date.strftime('%Y-%m-%d') if entry.invoice_date else '' }}</td>
+                <td>{{ entry.due_date.strftime('%Y-%m-%d') if entry.due_date else '' }}</td>
+                <td>{{ entry.scheduled_date.strftime('%Y-%m-%d') if entry.scheduled_date else '' }}</td>
+                <td>{{ entry.status }}</td>
+                <td>{{ entry.terms }}</td>
+                <td>{% if discount and entry.scheduled_date != entry.due_date %}✔️ Early Payment Discount{% else %}—{%
+                    endif %}</td>
+            </tr>
+            {% else %}
             <tr>
-                <td>{{ e.id }}</td>
-                <td>{{ e.vendor_name }}</td>
-                <td>{{ e.invoice_number }}</td>
-                <td>{{ e.invoice_date.strftime('%Y-%m-%d') }}</td>
-                <td>{{ e.due_date.strftime('%Y-%m-%d') }}</td>
-                <td>{{ "%.2f"|format(e.amount) }}</td>
-                <td>{{ e.email }}</td>
+                <td colspan="10" style="text-align:center;">No invoices found.</td>
             </tr>
             {% endfor %}
         </tbody>
     </table>
+
 </body>
 
 </html>

@@ -1,124 +1,161 @@
 from flask import Flask, render_template, request, redirect, url_for, flash
-from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime, timedelta
-import smtplib
-from email.message import EmailMessage
-from dateutil.parser import parse  # ✅ NEW
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from datetime import datetime, timedelta, date
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://postgres:admin123@localhost/payment_agent_db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.secret_key = 'your_secret_key_here'
-db = SQLAlchemy(app)
+app.secret_key = 'your_secret_key'
 
-EMAIL_HOST_USER = 'gauravsonar260@gmail.com'
-EMAIL_HOST_PASSWORD = 'jvvk uxqm tdos zpep'
+conn = None
 
-class PaymentEntry(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    vendor_name = db.Column(db.String(100), nullable=False)
-    invoice_number = db.Column(db.String(100), nullable=False)
-    invoice_date = db.Column(db.Date, nullable=False)
-    due_date = db.Column(db.Date, nullable=False)
-    amount = db.Column(db.Float, nullable=False)
-   
-    email = db.Column(db.String(120), nullable=False)
+def init_db():
+    global conn
+    conn = psycopg2.connect(
+        host='localhost',
+        database='payment_agent_db',
+        user='postgres',
+        password='admin123'
+    )
+    with conn.cursor() as cur:
+        cur.execute('''
+        CREATE TABLE IF NOT EXISTS invoices (
+            id SERIAL PRIMARY KEY,
+            invoice_no TEXT,
+            vendor TEXT,
+            vendor_email TEXT,
+            invoice_date DATE,
+            due_date DATE,
+            amount NUMERIC,
+            terms TEXT,
+            status TEXT,
+            scheduled_date DATE
+        );
+        ''')
+        conn.commit()
 
-def send_email(to_email, subject, body):
-    msg = EmailMessage()
-    msg['Subject'] = subject
-    msg['From'] = EMAIL_HOST_USER
-    msg['To'] = to_email
-    msg.set_content(body)
-    try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as smtp:
-            smtp.login(EMAIL_HOST_USER, EMAIL_HOST_PASSWORD)
-            smtp.send_message(msg)
-        print(f"✅ Email sent to {to_email}")
-    except Exception as e:
-        print(f"❌ Failed to send email to {to_email}: {e}")
+def add_invoice(invoice):
+    with conn.cursor() as cur:
+        cur.execute('''
+            INSERT INTO invoices (invoice_no, vendor, vendor_email, invoice_date, due_date, amount, terms, status, scheduled_date)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ''', (
+            invoice.get('invoice_no'),
+            invoice.get('vendor'),
+            invoice.get('vendor_email'),
+            invoice.get('invoice_date'),
+            invoice.get('due_date'),
+            invoice.get('amount'),
+            invoice.get('terms'),
+            invoice.get('status'),
+            invoice.get('scheduled_date')
+        ))
+        conn.commit()
 
-def check_and_send_reminders():
-    today = datetime.today().date()
-    cutoff = today + timedelta(days=3)
-    due_entries = PaymentEntry.query.filter(PaymentEntry.due_date <= cutoff).all()
+def get_all_invoices():
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute('SELECT * FROM invoices ORDER BY id DESC')
+        return cur.fetchall()
 
-    for entry in due_entries:
-        subject = f"🕒 Payment Reminder: Invoice {entry.invoice_number}"
-        body = (
-            f"Dear Finance Team,\n\n"
-            f"This is a reminder that a payment of Rs. {entry.amount} to vendor '{entry.vendor_name}' "
-            f"(Invoice No: {entry.invoice_number}) is due on {entry.due_date}.\n\n"
-            f"Please ensure timely processing to maintain healthy vendor relationships.\n\n"
-            f"Thank you."
-        )
-        send_email(entry.email, subject, body)
+def schedule_payments():
+    """
+    Simple logic to schedule payment dates:
+    - If terms contain '2/10' (2% discount if paid within 10 days), schedule early payment.
+    - Otherwise, scheduled_date = due_date.
+    """
+    invoices = get_all_invoices()
+    for inv in invoices:
+        scheduled_date = inv['due_date']
+        if inv['terms'] and '2/10' in inv['terms']:
+            early_payment_date = inv['invoice_date'] + timedelta(days=10)
+            # Schedule early payment only if early_payment_date <= due_date
+            if early_payment_date <= inv['due_date']:
+                scheduled_date = early_payment_date
+        # Update only if scheduled_date changed or not set
+        if inv['scheduled_date'] != scheduled_date:
+            with conn.cursor() as cur:
+                cur.execute('UPDATE invoices SET scheduled_date = %s WHERE id = %s', (scheduled_date, inv['id']))
+                conn.commit()
 
 @app.route('/')
 def index():
-    entries = PaymentEntry.query.order_by(PaymentEntry.due_date).all()
+    schedule_payments()  # Update schedule on each page load
+    entries = get_all_invoices()
     return render_template('index.html', entries=entries)
 
 @app.route('/upload_form', methods=['POST'])
 def upload_form():
-    vendor_name    = request.form['vendor_name']
-    invoice_number = request.form['invoice_number']
-    invoice_date   = parse(request.form['invoice_date']).date()  # ✅ UPDATED
-    due_date       = parse(request.form['due_date']).date()      # ✅ UPDATED
-    amount         = float(request.form['amount'])
-    email          = request.form['email']
+    vendor_name = request.form.get('vendor_name')
+    invoice_number = request.form.get('invoice_number')
+    invoice_date = request.form.get('invoice_date')
+    due_date = request.form.get('due_date')
+    amount = request.form.get('amount')
+    email = request.form.get('email')
+    terms = request.form.get('terms', '')  # Optional field
+    status = 'Scheduled'  # Default status
+    scheduled_date = None
 
-    entry = PaymentEntry(
-        vendor_name=vendor_name,
-        invoice_number=invoice_number,
-        invoice_date=invoice_date,
-        due_date=due_date,
-        amount=amount,
-        email=email
-    )
-    db.session.add(entry)
-    db.session.commit()
+    try:
+        invoice_date_obj = datetime.strptime(invoice_date, '%Y-%m-%d').date()
+        due_date_obj = datetime.strptime(due_date, '%Y-%m-%d').date()
+        amount_float = float(amount)
+    except Exception as e:
+        flash('Invalid date or amount format', 'error')
+        return redirect(url_for('index'))
 
-    check_and_send_reminders()
-    flash("Entry added and reminders checked.", "success")
+    invoice = {
+        'invoice_no': invoice_number,
+        'vendor': vendor_name,
+        'vendor_email': email,
+        'invoice_date': invoice_date_obj,
+        'due_date': due_date_obj,
+        'amount': amount_float,
+        'terms': terms,
+        'status': status,
+        'scheduled_date': scheduled_date
+    }
+
+    add_invoice(invoice)
+    flash('Invoice added successfully!', 'success')
     return redirect(url_for('index'))
 
 @app.route('/upload_csv', methods=['POST'])
 def upload_csv():
-    file = request.files['file']
-    if file and file.filename.lower().endswith('.csv'):
-        import csv
-        stream = file.stream.read().decode("utf-8").splitlines()
-        reader = csv.reader(stream)
-        next(reader)
-        for row in reader:
-            invoice_date = parse(row[2]).date()  # ✅ FLEXIBLE DATE
-            due_date     = parse(row[3]).date()  # ✅ FLEXIBLE DATE
-            entry = PaymentEntry(
-                vendor_name    = row[0],
-                invoice_number = row[1],
-                invoice_date   = invoice_date,
-                due_date       = due_date,
-                amount         = float(row[4]),
-                email          = row[5]
-            )
-            db.session.add(entry)
-        db.session.commit()
+    file = request.files.get('file')
+    if not file:
+        flash('No file selected', 'error')
+        return redirect(url_for('index'))
 
-        check_and_send_reminders()
-        flash("CSV uploaded and reminders checked.", "success")
-    else:
-        flash("Please upload a valid .csv file.", "error")
+    import csv
+    import io
+    stream = io.StringIO(file.stream.read().decode("UTF8"), newline=None)
+    reader = csv.DictReader(stream)
 
-    return redirect(url_for('index'))
+    count = 0
+    for row in reader:
+        try:
+            invoice_date_obj = datetime.strptime(row['invoice_date'], '%Y-%m-%d').date()
+            due_date_obj = datetime.strptime(row['due_date'], '%Y-%m-%d').date()
+            amount_float = float(row['amount'])
+            invoice = {
+                'invoice_no': row.get('invoice_no'),
+                'vendor': row.get('vendor'),
+                'vendor_email': row.get('vendor_email'),
+                'invoice_date': invoice_date_obj,
+                'due_date': due_date_obj,
+                'amount': amount_float,
+                'terms': row.get('terms', ''),
+                'status': 'Scheduled',
+                'scheduled_date': None
+            }
+            add_invoice(invoice)
+            count += 1
+        except Exception as e:
+            # Skip invalid rows or log error
+            continue
 
-@app.route('/test_email')
-def test_email():
-    check_and_send_reminders()
-    flash("Reminder check executed.", "info")
+    flash(f'{count} invoices uploaded successfully!', 'success')
     return redirect(url_for('index'))
 
 if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
+    init_db()
     app.run(debug=True)
