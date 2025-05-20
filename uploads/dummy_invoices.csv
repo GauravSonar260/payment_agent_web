@@ -1,0 +1,4 @@
+Invoice No,Vendor,Invoice Date,Due Date,Amount,Terms
+INV101,Dell,2025-05-01,2025-05-31,50000,Net 30
+INV102,HP,2025-05-03,2025-05-13,30000,"2/10 Net 30"
+INV103,Lenovo,2025-05-04,2025-05-20,40000,Net 15

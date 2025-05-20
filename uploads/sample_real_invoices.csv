@@ -1,0 +1,6 @@
+invoice_no,vendor,invoice_date,due_date,amount,terms
+INV1001,Tata Motors,2025-05-01,2025-05-10,15000.0,Net 10
+INV1002,Infosys Ltd,2025-05-03,2025-05-13,22500.75,Net 10
+INV1003,Wipro,2025-05-05,2025-05-15,18000.5,Net 10
+INV1004,Reliance Retail,2025-05-06,2025-05-16,30000.0,Net 10
+INV1005,HCL Technologies,2025-05-08,2025-05-18,25000.25,Net 10
